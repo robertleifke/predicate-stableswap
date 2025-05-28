@@ -15,11 +15,50 @@ import {BeforeSwapDelta, toBeforeSwapDelta} from "v4-core/src/types/BeforeSwapDe
 import {Currency} from "v4-core/src/types/Currency.sol";
 import {SafeCast} from "v4-core/src/libraries/SafeCast.sol";
 
-contract PredicateSwap is BaseHook, SafeCallback {
+import {PredicateClient} from "@predicate/contracts/src/examples/wrapper/PredicateClientWrapper.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+
+/**
+ * @title PredicateSwap
+ * @author Predicate Labs
+ * @notice A compliant exchange for stablecoins.
+ */
+contract PredicateSwap is BaseHook, SafeCallback, PredicateClient, Ownable2Step {
     using SafeCast for uint256;
     using PoolIdLibrary for PoolKey;
 
-    constructor(IPoolManager poolManager_) SafeCallback(poolManager_) {}
+    error DonationNotAllowed();
+    error AuthorizedUserNotAllowed();
+
+    // ----------------------------
+    // State Variables
+    // ----------------------------
+    // IV4Router public router;
+    // IPositionManager public posm;
+    // mapping(address => bool) public isAuthorizedLP;
+    // mapping(address => bool) public isAuthorizedSwapper;
+
+    // ----------------------------
+    // Events
+    // ----------------------------
+    event PolicyUpdated(string policyID);
+    event PredicateManagerUpdated(address predicateManager);
+    event RouterUpdated(address router);
+    event PosmUpdated(address posm);
+    event AuthorizedLPAdded(address lp);
+    event AuthorizedLPRemoved(address lp);
+    event AuthorizedSwapperAdded(address swapper);
+    event AuthorizedUserRemoved(address user);
+
+    constructor(
+        IPoolManager poolManager_,
+        IV4Router router_,
+        IPositionManager posm_,
+        address serviceManager_
+    ) SafeCallback(poolManager_) {
+        router = router_;
+        posm = posm_;
+    }
 
     function _poolManager() internal view override returns (IPoolManager) {
         return poolManager;
@@ -45,7 +84,7 @@ contract PredicateSwap is BaseHook, SafeCallback {
     }
 
     /// @notice Constant sum swap via custom accounting, tokens are exchanged 1:1
-    function _beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes calldata)
+    function _beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes calldata, bytes calldata hookData)
         internal
         override
         returns (bytes4, BeforeSwapDelta, uint24)
@@ -83,45 +122,110 @@ contract PredicateSwap is BaseHook, SafeCallback {
         return (BaseHook.beforeSwap.selector, returnDelta, 0);
     }
 
-    /// @notice No liquidity will be managed by v4 PoolManager
-    function _beforeAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
-        internal
-        pure
-        override
-        returns (bytes4)
-    {
-        revert("No v4 Liquidity allowed");
+    /// @notice No donations allowed
+    function _beforeDonate(
+        address sender,
+        PoolKey calldata key,
+        uint256 amount0,
+        uint256 amount1,
+        bytes calldata hookData
+    ) internal override returns (bytes4) {
+        revert DonationNotAllowed();
     }
 
-    // -----------------------------------------------
-    // Liquidity Functions, not production ready
-    // -----------------------------------------------
-    /// @notice Add liquidity 1:1 for the constant sum curve
-    /// @param key PoolKey of the pool to add liquidity to
-    /// @param amountPerToken The amount of each token to be added as liquidity
-    function addLiquidity(PoolKey calldata key, uint256 amountPerToken) external {
-        poolManager.unlock(abi.encode(msg.sender, key.currency0, key.currency1, amountPerToken));
+    /**
+     * @notice Sets the policy ID read by Predicate Operators
+     * @param _policyID The new policy ID
+     */
+    function setPolicy(
+        string memory _policyID
+    ) external onlyOwner {
+        _setPolicy(_policyID);
+        emit PolicyUpdated(_policyID);
     }
 
-    function _unlockCallback(bytes calldata data) internal virtual override returns (bytes memory) {
-        (address payer, Currency currency0, Currency currency1, uint256 amountPerToken) =
-            abi.decode(data, (address, Currency, Currency, uint256));
+    /**
+     * @notice Sets the predicate manager used to authorize transactions
+     * @param _predicateManager The new predicate manager
+     */
+    function setPredicateManager(
+        address _predicateManager
+    ) external onlyOwner {
+        _setPredicateManager(_predicateManager);
+        emit PredicateManagerUpdated(_predicateManager);
+    }
 
-        // transfer ERC20 to PoolManager
-        poolManager.sync(currency0);
-        IERC20(Currency.unwrap(currency0)).transferFrom(payer, address(poolManager), amountPerToken);
-        poolManager.settle();
+    /**
+     * @notice Sets the router contract used to get the msgSender()
+     * @param _router The new router
+     */
+    function setRouter(
+        V4Router _router
+    ) external onlyOwner {
+        router = _router;
+        emit RouterUpdated(address(_router));
+    }
 
-        poolManager.sync(currency1);
-        IERC20(Currency.unwrap(currency1)).transferFrom(payer, address(poolManager), amountPerToken);
-        poolManager.settle();
+    /**
+     * @notice Sets the position manager contract
+     * @param _posm The new position manager
+     */
+    function setPosm(
+        PositionManager _posm
+    ) external onlyOwner {
+        posm = _posm;
+        emit PosmUpdated(address(_posm));
+    }
 
-        // mint ERC6909 to the hook
-        poolManager.mint(address(this), currency0.toId(), amountPerToken);
-        poolManager.mint(address(this), currency1.toId(), amountPerToken);
+    /**
+     * @notice Adds authorized liquidity providers
+     * @param _lps The addresses of the liquidity providers to add
+     */
+    function addAuthorizedLPs(
+        address[] memory _lps
+    ) external onlyOwner {
+        for (uint256 i = 0; i < _lps.length; i++) {
+            isAuthorizedLP[_lps[i]] = true;
+            emit AuthorizedLPAdded(_lps[i]);
+        }
+    }
 
-        // TODO: mint an LP receipt token
+    /**
+     * @notice Removes authorized liquidity providers
+     * @param _lps The addresses of the liquidity providers to remove
+     */
+    function removeAuthorizedLPs(
+        address[] memory _lps
+    ) external onlyOwner {
+        for (uint256 i = 0; i < _lps.length; i++) {
+            isAuthorizedLP[_lps[i]] = false;
+            emit AuthorizedLPRemoved(_lps[i]);
+        }
+    }
 
-        return "";
+    /**
+     * @notice Adds authorized swappers for swaps to bypass the predicate check
+     * @param _users The addresses of the swappers to add
+     */
+    function addAuthorizedSwapper(
+        address[] memory _users
+    ) external onlyOwner {
+        for (uint256 i = 0; i < _users.length; i++) {
+            isAuthorizedSwapper[_users[i]] = true;
+            emit AuthorizedSwapperAdded(_users[i]);
+        }
+    }
+
+    /**
+     * @notice Removes authorized swappers from the list
+     * @param _users The addresses of the swappers to remove
+     */
+    function removeAuthorizedSwapper(
+        address[] memory _users
+    ) external onlyOwner {
+        for (uint256 i = 0; i < _users.length; i++) {
+            isAuthorizedSwapper[_users[i]] = false;
+            emit AuthorizedUserRemoved(_users[i]);
+        }
     }
 }
