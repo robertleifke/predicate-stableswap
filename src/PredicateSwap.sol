@@ -15,7 +15,7 @@ import {BeforeSwapDelta, toBeforeSwapDelta} from "v4-core/src/types/BeforeSwapDe
 import {Currency} from "v4-core/src/types/Currency.sol";
 import {SafeCast} from "v4-core/src/libraries/SafeCast.sol";
 
-contract Counter is BaseHook, SafeCallback {
+contract PredicateSwap is BaseHook, SafeCallback {
     using SafeCast for uint256;
     using PoolIdLibrary for PoolKey;
 
