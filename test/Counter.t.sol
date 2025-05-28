@@ -7,12 +7,12 @@ import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
-import {Counter} from "../src/Counter.sol";
+import {PredicateSwap} from "../src/PredicateSwap.sol";
 
 import {Fixtures} from "./utils/Fixtures.sol";
 
-contract CounterTest is Test, Fixtures {
-    Counter hook;
+contract PredicateSwapTest is Test, Fixtures {
+    PredicateSwap hook;
 
     uint256 tokenId;
     int24 tickLower;
@@ -31,8 +31,8 @@ contract CounterTest is Test, Fixtures {
                 ^ (0x4444 << 144) // Namespace the hook to avoid collisions
         );
         bytes memory constructorArgs = abi.encode(manager); //Add all the necessary constructor arguments from the hook
-        deployCodeTo("Counter.sol:Counter", constructorArgs, flags);
-        hook = Counter(flags);
+        deployCodeTo("PredicateSwap.sol:PredicateSwap", constructorArgs, flags);
+        hook = PredicateSwap(flags);
 
         // Create the pool
         key = PoolKey(currency0, currency1, 3000, 60, IHooks(hook));
