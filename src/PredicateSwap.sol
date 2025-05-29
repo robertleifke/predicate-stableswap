@@ -2,6 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+
 import {BaseHook} from "./forks/BaseHook.sol";
 import {SafeCallback} from "v4-periphery/src/base/SafeCallback.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
@@ -16,27 +18,30 @@ import {Currency} from "v4-core/src/types/Currency.sol";
 import {SafeCast} from "v4-core/src/libraries/SafeCast.sol";
 
 import {PredicateClient} from "@predicate/contracts/src/examples/wrapper/PredicateClientWrapper.sol";
+import {PredicateMessage} from "@predicate/contracts/src/interfaces/IPredicateClient.sol";
 
 /**
  * @title PredicateSwap
  * @author Predicate Labs
  * @notice A compliant exchange for stablecoins.
  */
-contract PredicateSwap is BaseHook, SafeCallback, PredicateClient {
+contract PredicateSwap is BaseHook, SafeCallback, PredicateClient, Ownable {
     using SafeCast for uint256;
     using PoolIdLibrary for PoolKey;
 
-    // ----------------------------
-    // Events
-    // ----------------------------
+    error PredicateAuthorizationFailed();
+    error DonationNotAllowed();
+    
     event PolicyUpdated(string policyID);
     event PredicateManagerUpdated(address predicateManager);
 
     constructor(
         IPoolManager poolManager_,
         address _serviceManager,
-        string memory _policyID
-    ) SafeCallback(poolManager_) {
+        string memory _policyID,
+        address _owner
+    ) SafeCallback(poolManager_) Ownable(_owner) {
+        _initPredicateClient(_serviceManager, _policyID);
     }
 
     function _poolManager() internal view override returns (IPoolManager) {
@@ -63,42 +68,59 @@ contract PredicateSwap is BaseHook, SafeCallback, PredicateClient {
     }
 
     /// @notice Constant sum swap via custom accounting, tokens are exchanged 1:1
-    function _beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes calldata, bytes calldata hookData)
+    function _beforeSwap(address sender, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes calldata hookData)
         internal
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        // determine inbound/outbound token based on 0->1 or 1->0 swap
-        (Currency inputCurrency, Currency outputCurrency) =
-            params.zeroForOne ? (key.currency0, key.currency1) : (key.currency1, key.currency0);
-
+        // Calculate swap details
+        uint256 amount = params.amountSpecified < 0 ? uint256(-params.amountSpecified) : uint256(params.amountSpecified);
         bool isExactInput = params.amountSpecified < 0;
-
-        // tokens are always swapped 1:1, so use amountSpecified to determine both input and output amounts
-        uint256 amount = isExactInput ? uint256(-params.amountSpecified) : uint256(params.amountSpecified);
-
-        // take the input token, as ERC6909, from the PoolManager
-        // the debt will be paid by the swapper via the swap router
-        // input currency is added to hook's reserves
+        
+        // Perform the swap accounting
+        (Currency inputCurrency, Currency outputCurrency) = params.zeroForOne 
+            ? (key.currency0, key.currency1) 
+            : (key.currency1, key.currency0);
+            
         poolManager.mint(address(this), inputCurrency.toId(), amount);
-
-        // pay the output token, as ERC6909, to the PoolManager
-        // the credit will be forwarded to the swap router, which then forwards it to the swapper
-        // output currency is paid from the hook's reserves
         poolManager.burn(address(this), outputCurrency.toId(), amount);
 
+        // Authorize the transaction with Predicate
+        _validatePredicateAuthorization(sender, key, params, hookData);
+
+        // Return delta
         int128 tokenAmount = amount.toInt128();
-        // return the delta to the PoolManager, so it can process the accounting
-        // exact input:
-        //   specifiedDelta = positive, to offset the input token taken by the hook (negative delta)
-        //   unspecifiedDelta = negative, to offset the credit of the output token paid by the hook (positive delta)
-        // exact output:
-        //   specifiedDelta = negative, to offset the output token paid by the hook (positive delta)
-        //   unspecifiedDelta = positive, to offset the input token taken by the hook (negative delta)
-        BeforeSwapDelta returnDelta =
-            isExactInput ? toBeforeSwapDelta(tokenAmount, -tokenAmount) : toBeforeSwapDelta(-tokenAmount, tokenAmount);
+        BeforeSwapDelta returnDelta = isExactInput 
+            ? toBeforeSwapDelta(tokenAmount, -tokenAmount) 
+            : toBeforeSwapDelta(-tokenAmount, tokenAmount);
 
         return (BaseHook.beforeSwap.selector, returnDelta, 0);
+    }
+
+    /// @notice Internal function to validate predicate authorization
+    function _validatePredicateAuthorization(
+        address sender,
+        PoolKey calldata key,
+        IPoolManager.SwapParams calldata params,
+        bytes calldata hookData
+    ) internal {
+        PredicateMessage memory predicateMessage = abi.decode(hookData, (PredicateMessage));
+
+        bytes memory encodeSigAndArgs = abi.encodeWithSignature(
+            "_beforeSwap(address,address,address,uint24,int24,address,bool,int256)",
+            sender,
+            key.currency0,
+            key.currency1,
+            key.fee,
+            key.tickSpacing,
+            address(key.hooks),
+            params.zeroForOne,
+            params.amountSpecified
+        );
+
+        if (!_authorizeTransaction(predicateMessage, encodeSigAndArgs, sender, 0)) {
+            revert PredicateAuthorizationFailed();
+        }
     }
 
     /// @notice No donations allowed
@@ -110,6 +132,13 @@ contract PredicateSwap is BaseHook, SafeCallback, PredicateClient {
         bytes calldata hookData
     ) internal override returns (bytes4) {
         revert DonationNotAllowed();
+    }
+
+    /// @notice Implementation of SafeCallback's _unlockCallback
+    function _unlockCallback(bytes calldata data) internal override returns (bytes memory) {
+        // This function is required by SafeCallback but can be left empty for now
+        // as the hook doesn't need to perform any unlock operations
+        return "";
     }
 
     /**
@@ -132,27 +161,5 @@ contract PredicateSwap is BaseHook, SafeCallback, PredicateClient {
     ) external onlyOwner {
         _setPredicateManager(_predicateManager);
         emit PredicateManagerUpdated(_predicateManager);
-    }
-
-    /**
-     * @notice Sets the router contract used to get the msgSender()
-     * @param _router The new router
-     */
-    function setRouter(
-        IV4Router _router
-    ) external onlyOwner {
-        router = _router;
-        emit RouterUpdated(address(_router));
-    }
-
-    /**
-     * @notice Sets the position manager contract
-     * @param _posm The new position manager
-     */
-    function setPosm(
-        IPositionManager _posm
-    ) external onlyOwner {
-        posm = _posm;
-        emit PosmUpdated(address(_posm));
     }
 }

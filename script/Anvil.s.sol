@@ -48,14 +48,23 @@ contract PredicateSwapScript is Script, DeployPermit2 {
         );
 
         // Mine a salt that will produce a hook address with the correct permissions
+        address serviceManager = address(0x1); // Placeholder service manager
+        string memory policyID = "default-policy"; // Placeholder policy ID
+        address owner = msg.sender; // Script deployer as owner
+        
         (address hookAddress, bytes32 salt) =
-            HookMiner.find(CREATE2_DEPLOYER, permissions, type(PredicateSwap).creationCode, abi.encode(address(manager)));
+            HookMiner.find(CREATE2_DEPLOYER, permissions, type(PredicateSwap).creationCode, abi.encode(address(manager), serviceManager, policyID, owner));
 
         // ----------------------------- //
         // Deploy the hook using CREATE2 //
         // ----------------------------- //
         vm.broadcast();
-        PredicateSwap predicateSwap = new PredicateSwap{salt: salt}(manager);
+        PredicateSwap predicateSwap = new PredicateSwap{salt: salt}(
+            manager, 
+            serviceManager, 
+            policyID, 
+            owner
+        );
         require(address(predicateSwap) == hookAddress, "PredicateSwapScript: hook address mismatch");
 
         // Additional helpers for interacting with the pool

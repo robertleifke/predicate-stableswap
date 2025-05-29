@@ -21,13 +21,22 @@ contract PredicateSwapScript is Script, Constants {
         );
 
         // Mine a salt that will produce a hook address with the correct flags
-        bytes memory constructorArgs = abi.encode(POOLMANAGER);
+        address serviceManager = address(0x1); // Placeholder service manager
+        string memory policyID = "default-policy"; // Placeholder policy ID
+        address owner = msg.sender; // Script deployer as owner
+        
+        bytes memory constructorArgs = abi.encode(POOLMANAGER, serviceManager, policyID, owner);
         (address hookAddress, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, type(PredicateSwap).creationCode, constructorArgs);
 
         // Deploy the hook using CREATE2
         vm.broadcast();
-        PredicateSwap predicateSwap = new PredicateSwap{salt: salt}(IPoolManager(POOLMANAGER));
+        PredicateSwap predicateSwap = new PredicateSwap{salt: salt}(
+            IPoolManager(POOLMANAGER), 
+            serviceManager, 
+            policyID, 
+            owner
+        );
         require(address(predicateSwap) == hookAddress, "PredicateSwapScript: hook address mismatch");
     }
 }
