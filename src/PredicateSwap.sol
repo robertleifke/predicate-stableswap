@@ -16,48 +16,27 @@ import {Currency} from "v4-core/src/types/Currency.sol";
 import {SafeCast} from "v4-core/src/libraries/SafeCast.sol";
 
 import {PredicateClient} from "@predicate/contracts/src/examples/wrapper/PredicateClientWrapper.sol";
-import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 /**
  * @title PredicateSwap
  * @author Predicate Labs
  * @notice A compliant exchange for stablecoins.
  */
-contract PredicateSwap is BaseHook, SafeCallback, PredicateClient, Ownable2Step {
+contract PredicateSwap is BaseHook, SafeCallback, PredicateClient {
     using SafeCast for uint256;
     using PoolIdLibrary for PoolKey;
-
-    error DonationNotAllowed();
-    error AuthorizedUserNotAllowed();
-
-    // ----------------------------
-    // State Variables
-    // ----------------------------
-    // IV4Router public router;
-    // IPositionManager public posm;
-    // mapping(address => bool) public isAuthorizedLP;
-    // mapping(address => bool) public isAuthorizedSwapper;
 
     // ----------------------------
     // Events
     // ----------------------------
     event PolicyUpdated(string policyID);
     event PredicateManagerUpdated(address predicateManager);
-    event RouterUpdated(address router);
-    event PosmUpdated(address posm);
-    event AuthorizedLPAdded(address lp);
-    event AuthorizedLPRemoved(address lp);
-    event AuthorizedSwapperAdded(address swapper);
-    event AuthorizedUserRemoved(address user);
 
     constructor(
         IPoolManager poolManager_,
-        IV4Router router_,
-        IPositionManager posm_,
-        address serviceManager_
+        address _serviceManager,
+        string memory _policyID
     ) SafeCallback(poolManager_) {
-        router = router_;
-        posm = posm_;
     }
 
     function _poolManager() internal view override returns (IPoolManager) {
@@ -160,7 +139,7 @@ contract PredicateSwap is BaseHook, SafeCallback, PredicateClient, Ownable2Step 
      * @param _router The new router
      */
     function setRouter(
-        V4Router _router
+        IV4Router _router
     ) external onlyOwner {
         router = _router;
         emit RouterUpdated(address(_router));
@@ -171,61 +150,9 @@ contract PredicateSwap is BaseHook, SafeCallback, PredicateClient, Ownable2Step 
      * @param _posm The new position manager
      */
     function setPosm(
-        PositionManager _posm
+        IPositionManager _posm
     ) external onlyOwner {
         posm = _posm;
         emit PosmUpdated(address(_posm));
-    }
-
-    /**
-     * @notice Adds authorized liquidity providers
-     * @param _lps The addresses of the liquidity providers to add
-     */
-    function addAuthorizedLPs(
-        address[] memory _lps
-    ) external onlyOwner {
-        for (uint256 i = 0; i < _lps.length; i++) {
-            isAuthorizedLP[_lps[i]] = true;
-            emit AuthorizedLPAdded(_lps[i]);
-        }
-    }
-
-    /**
-     * @notice Removes authorized liquidity providers
-     * @param _lps The addresses of the liquidity providers to remove
-     */
-    function removeAuthorizedLPs(
-        address[] memory _lps
-    ) external onlyOwner {
-        for (uint256 i = 0; i < _lps.length; i++) {
-            isAuthorizedLP[_lps[i]] = false;
-            emit AuthorizedLPRemoved(_lps[i]);
-        }
-    }
-
-    /**
-     * @notice Adds authorized swappers for swaps to bypass the predicate check
-     * @param _users The addresses of the swappers to add
-     */
-    function addAuthorizedSwapper(
-        address[] memory _users
-    ) external onlyOwner {
-        for (uint256 i = 0; i < _users.length; i++) {
-            isAuthorizedSwapper[_users[i]] = true;
-            emit AuthorizedSwapperAdded(_users[i]);
-        }
-    }
-
-    /**
-     * @notice Removes authorized swappers from the list
-     * @param _users The addresses of the swappers to remove
-     */
-    function removeAuthorizedSwapper(
-        address[] memory _users
-    ) external onlyOwner {
-        for (uint256 i = 0; i < _users.length; i++) {
-            isAuthorizedSwapper[_users[i]] = false;
-            emit AuthorizedUserRemoved(_users[i]);
-        }
     }
 }
